@@ -139,27 +139,27 @@ def eval_epoch(model, validation_data, device):
     return loss_per_word, accuracy, total_loss_recon/n_word_total, total_loss_kl/total_sen
 
 
-def train(model, training_data, validation_data, optimizer, device, idx2word, opt):
+def train(model, training_data, validation_data, optimizer, device, idx2word, args):
     '''Start training'''
     log_train_file = None
     log_valid_file = None
-    beta_epochs = frange_cycle_linear(start=0.0, stop=1.0, n_epoch=opt.epoch)
+    beta_epochs = frange_cycle_linear(start=0.0, stop=1.0, n_epoch=args.epoch)
 
-    if opt.log:
-        log_train_file = opt.log + '.train.log'
-        log_valid_file = opt.log + '.valid.log'
+    if args.log:
+        log_train_file = args.log + '.train.log'
+        log_valid_file = args.log + '.valid.log'
 
         print('[Info] Training performence will be written to file: {} and {}'.format(log_train_file, log_valid_file))
         with open(log_train_file, 'w') as log_tf, open(log_valid_file,'w') as log_vf:
             log_tf.write('epoch,loss,ppl,accuracy\n')
             log_vf.write('epoch,loss,ppl,accuracy\n')
     valid_accus = []
-    for epoch_i in range(opt.epoch):
+    for epoch_i in range(args.epoch):
         beta_this_epoch = beta_epochs[epoch_i]
         print('[ Epoch',epoch_i,' ]')
         start = time.time()
         train_loss, train_accu, train_loss_recon, train_loss_kl = train_epoch(
-            model, training_data, optimizer, device, smoothing= opt.label_smoothing, lambda_kl=beta_this_epoch
+            model, training_data, optimizer, device, smoothing= args.label_smoothing, lambda_kl=beta_this_epoch
         )
         print(' -(Trianing) ppl: {ppl: 8.5f}, accuracy: {accu:3.3f}, train_loss_recon: {recon: 8.5f}, train_loss_kl:{kl: 8.5f}, elapse: {elapse:3.3f} min'.format(ppl=math.exp(min(train_loss,100)),accu=100*train_accu,
                                                                                                             recon=train_loss_recon, kl=train_loss_kl,elapse=(time.time()-start)/60))
@@ -171,15 +171,15 @@ def train(model, training_data, validation_data, optimizer, device, idx2word, op
         model_state_dict = model.state_dict()
         checkpoint = {
             'model': model_state_dict,
-            'settings': opt,
+            'settings': args,
             'epoch': epoch_i
         }
-        if opt.save_model:
-            if opt.save_mode == 'all':
-                model_name = opt.save_model + '_accu_{accu:3.3f}.chkpt'.format(accu=100*valid_accu)
+        if args.save_model:
+            if args.save_mode == 'all':
+                model_name = args.save_model + '_accu_{accu:3.3f}.chkpt'.format(accu=100*valid_accu)
                 torch.save(checkpoint, model_name)
-            if opt.save_mode == 'best':
-                model_name = opt.save_model + '.chkpt'
+            if args.save_mode == 'best':
+                model_name = args.save_model + '.chkpt'
                 if valid_accu >= max(valid_accus):
                     torch.save(checkpoint, model_name)
                     print(' -[Info] The check point file has been updated.')
@@ -235,29 +235,29 @@ def main():
     parser.add_argument('-no_cuda',action='store_true')
     parser.add_argument('-label_smoothing',action='store_true')
     torch.manual_seed(12)
-    opt = parser.parse_args()
-    opt.cuda = not opt.no_cuda
+    args = parser.parse_args()
+    args.cuda = not args.no_cuda
     # god seed
     
     #====== Loading Dataset =====#
-    data = torch.load(opt.data)
-    opt.max_token_seq_len = max(len(x) for x in data['train']['ref'])
+    data = torch.load(args.data)
+    args.max_token_seq_len = max(len(x) for x in data['train']['ref'])
     
-    training_data, validation_data = prepare_dataloaders(data,opt)
-    opt.vocab_size = training_data.dataset.src_vocab_size
+    training_data, validation_data = prepare_dataloaders(data,args)
+    args.vocab_size = training_data.dataset.src_vocab_size
 
     #======= Preparing model ====#
-    print(opt)
-    device = torch.device('cuda:1' if opt.cuda else 'cpu')
+    print(args)
+    device = torch.device('cuda:1' if args.cuda else 'cpu')
     # device = torch.device('cpu')
     graph2seq = Graph2seq(
-        vocab_size=opt.vocab_size, 
-        embedding_dim = opt.embedding_dim, 
-        hidden_size = opt.hidden_size, 
-        z_dim =opt.z_dim,
-        output_size = opt.vocab_size,
-        n_hop=opt.n_hop,
-        teacher_forcing=opt.teacher_forcing,
+        vocab_size=args.vocab_size, 
+        embedding_dim = args.embedding_dim, 
+        hidden_size = args.hidden_size, 
+        z_dim =args.z_dim,
+        output_size = args.vocab_size,
+        n_hop=args.n_hop,
+        teacher_forcing=args.teacher_forcing,
         dropout=0.1).to(device)
 
 
@@ -265,12 +265,12 @@ def main():
         optim.Adam(
             filter(lambda x: x.requires_grad, graph2seq.parameters()),
             betas=(0.9,0.98),eps=1e-09),
-        opt.hidden_size, opt.n_warmup_steps
+        args.hidden_size, args.n_warmup_steps
     )
     idx2word = {value:item for item, value in data['dict']['tgt'].items()}
-    train(graph2seq, training_data, validation_data, optimizer, device,idx2word,opt)
+    train(graph2seq, training_data, validation_data, optimizer, device,idx2word,args)
 
-def prepare_dataloaders(data, opt):
+def prepare_dataloaders(data, args):
     # =====Prepareing DataLoader=====
     train_loader = torch.utils.data.DataLoader(
         MyDataset(
@@ -284,7 +284,7 @@ def prepare_dataloaders(data, opt):
             tgt_insts = data['train']['ref']
         ),
         num_workers = 4,
-        batch_size=opt.batch_size,
+        batch_size=args.batch_size,
         collate_fn=collate_fn,
         shuffle=True
     )
@@ -300,7 +300,7 @@ def prepare_dataloaders(data, opt):
             tgt_insts = data['dev']['ref']
         ),
         num_workers = 4,
-        batch_size=opt.batch_size,
+        batch_size=args.batch_size,
         collate_fn=collate_fn,
         shuffle=False,
     )

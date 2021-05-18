@@ -1,4 +1,4 @@
-# MaKE_tEfHCLUiWxTQyJIo
+# MaKE
 
 model file in model/dual_graph_vae_2.py
 

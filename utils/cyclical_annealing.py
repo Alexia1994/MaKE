@@ -12,7 +12,7 @@ def frange_cycle_linear(start, stop, n_epoch, n_cycle=4, ratio=0.5):
 
         v , i = start , 0
         while v <= stop and (int(i+c*period) < n_epoch):
-            L[int(i+c*period)] = v
+            L[int(i + c*period)] = v
             v += step
             i += 1
     return L    

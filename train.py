@@ -9,12 +9,13 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data
 
-from dataset_dual import MyDataset, collate_fn
+from dataset import MyDataset, collate_fn
 from model.Constant import Constants
-from model.dual_graph_vae_2 import Graph2seq, ScheduledOptim
+from model.dualgraph_vae import Graph2seq, ScheduledOptim
 from utils.cyclical_annealing import frange_cycle_linear
 
 Constants = Constants()
+
 
 def cal_performence(pred, gold, mu_prior, log_var_prior, mu_posterior, log_var_posterior, plan_attns, lambda_kl):
     """
@@ -25,34 +26,32 @@ def cal_performence(pred, gold, mu_prior, log_var_prior, mu_posterior, log_var_p
     gold = gold.contiguous().view(-1)
     non_pad_mask = gold.ne(Constants.PAD)
     n_correct = pred.eq(gold)
+    # 去掉pad部分
     n_correct = n_correct.masked_select(non_pad_mask).sum().item()
     return loss, n_correct, loss_recon, loss_kl
     
+
 def gaussian_kld(recog_mu, recog_logvar, prior_mu, prior_logvar):
     kld = -0.5 * torch.sum(1 + (recog_logvar - prior_logvar)
                                - torch.div(torch.pow(prior_mu - recog_mu, 2), torch.exp(prior_logvar))
                                - torch.div(torch.exp(recog_logvar), torch.exp(prior_logvar)), 1)
     return torch.sum(kld)
 
-# def sparse_resularizer(attn_matrix):
-#     attn_matrix = attn_matrix.view(-1, attn_matrix.shape[-1])
-#     L_sparse = 0.5 * torch.sum(torch.abs(torch.sum(attn_matrix**2,1)-1),0)
-#     return L_sparse
-
-# def sparse_resularizer(attn_matrix):
-#     L_sparse = 0.5 * torch.mean(torch.abs(torch.sum(attn_matrix**2, dim=-1)-1))
-#     return L_sparse
 
 def cal_loss(pred, gold, mu_prior, log_var_prior, mu_posterior, log_var_posterior, plan_attns, lambda_kl):
     """
     Calculate cross entropy loss, apply label smoothing if needed
     """
+    print("before view: gold shape:", gold.shape)
+    print("pred shape:", pred.shape)
     gold = gold.contiguous().view(-1)
+    print("after view: gold shape:", gold.shape)
     loss_recon = F.cross_entropy(pred, gold, ignore_index=Constants.PAD, reduction='sum')
     # loss_kl = lambda_kl*-0.5 * torch.sum(1 + log_var - mu.pow(2)-log_var.exp())
     loss_kl = lambda_kl*gaussian_kld(mu_posterior, log_var_posterior, mu_prior, log_var_prior)
     # loss_sparse = sparse_resularizer(plan_attns)
     return loss_recon + loss_kl, loss_recon, loss_kl
+
 
 def train_epoch(model, training_data, optimizer, device, smoothing, lambda_kl):
     '''Epoch operation in training phase'''
@@ -60,25 +59,23 @@ def train_epoch(model, training_data, optimizer, device, smoothing, lambda_kl):
     total_loss = 0
     n_word_total = 0
     n_word_correct = 0
-    total_loss_recon, total_loss_kl = 0,0
+    total_loss_recon, total_loss_kl = 0, 0
     total_sen = 0
 
-    for batch in tqdm(training_data, mininterval=2, desc = ' -(Training) ', leave=False):
+    for batch in tqdm(training_data, mininterval=2, desc=' -(Training) ', leave=False):
 
         # prepare data
         equ_nodes, sns_nodes, equ_node_lens, sns_node_lens, equ_adj_matrixs, sns_adj_matrixs, tgt_seq, scene = map(lambda x: x.to(device), batch)
-        #print('src_seq shape:', src_seq.shape)
-        #print('src_pos shape:', src_pos.shape)
-        #print('tgt_seq shape:', tgt_seq.shape)
-        #print('tgt_pos shape:', tgt_pos.shape)
+        # need fix: 不是tempate, 是gold
         gold = tgt_seq
         # forward
         optimizer.zero_grad()
         
-        pred, recog_mu, recog_logvar, prior_mu, prior_logvar, plan_attns = model(equ_nodes, equ_adj_matrixs, equ_node_lens, sns_nodes,sns_adj_matrixs,sns_node_lens,tgt_seq,scene,device)
+        pred, recog_mu, recog_logvar, prior_mu, prior_logvar, plan_attns = model(equ_nodes, equ_adj_matrixs, equ_node_lens, sns_nodes, sns_adj_matrixs, sns_node_lens, tgt_seq, scene, device)
         #print('pred shape', pred.shape)
         #print('gold shape', gold.shape)
-
+        # pred: [batch_size, seq_len]
+        # gold: [batch_size, seq_len]
         # backward
         loss, n_correct, loss_recon, loss_kl = cal_performence(pred, gold, prior_mu, prior_logvar, recog_mu, recog_logvar, plan_attns, lambda_kl)
         #print(loss)
@@ -99,9 +96,10 @@ def train_epoch(model, training_data, optimizer, device, smoothing, lambda_kl):
         n_word = non_pad_mask.sum().item()
         n_word_total += n_word
         n_word_correct += n_correct
-    loss_per_word = total_loss /n_word_total
+    
+    loss_per_word = total_loss/n_word_total
     accuracy = n_word_correct/n_word_total
-    return loss_per_word, accuracy,total_loss_recon/n_word_total, total_loss_kl/total_sen
+    return loss_per_word, accuracy, total_loss_recon/n_word_total, total_loss_kl/total_sen
 
 
 def eval_epoch(model, validation_data, device):
@@ -113,7 +111,7 @@ def eval_epoch(model, validation_data, device):
     total_loss_recon, total_loss_kl = 0, 0
     total_sen=0
     with torch.no_grad():
-        for batch in tqdm(validation_data, mininterval=2, desc=' -(Validation) ',leave = False):
+        for batch in tqdm(validation_data, mininterval=2, desc=' -(Validation) ',leave=False):
             # prepare data
             equ_nodes, sns_nodes, equ_node_lens, sns_node_lens, equ_adj_matrixs, sns_adj_matrixs, tgt_seq, scene = map(lambda x: x.to(device), batch)
             gold = tgt_seq
@@ -146,13 +144,13 @@ def train(model, training_data, validation_data, optimizer, device, idx2word, ar
     beta_epochs = frange_cycle_linear(start=0.0, stop=1.0, n_epoch=args.epoch)
 
     if args.log:
-        log_train_file = args.log + '.train.log'
-        log_valid_file = args.log + '.valid.log'
+        log_train_file = args.log + 'train.log'
+        log_valid_file = args.log + 'valid.log'
 
         print('[Info] Training performence will be written to file: {} and {}'.format(log_train_file, log_valid_file))
-        with open(log_train_file, 'w') as log_tf, open(log_valid_file,'w') as log_vf:
-            log_tf.write('epoch,loss,ppl,accuracy\n')
-            log_vf.write('epoch,loss,ppl,accuracy\n')
+        with open(log_train_file, 'w') as log_tf, open(log_valid_file, 'w') as log_vf:
+            log_tf.write('epoch, loss, ppl, accuracy\n')
+            log_vf.write('epoch, loss, ppl, accuracy\n')
     valid_accus = []
     for epoch_i in range(args.epoch):
         beta_this_epoch = beta_epochs[epoch_i]
@@ -161,10 +159,11 @@ def train(model, training_data, validation_data, optimizer, device, idx2word, ar
         train_loss, train_accu, train_loss_recon, train_loss_kl = train_epoch(
             model, training_data, optimizer, device, smoothing= args.label_smoothing, lambda_kl=beta_this_epoch
         )
-        print(' -(Trianing) ppl: {ppl: 8.5f}, accuracy: {accu:3.3f}, train_loss_recon: {recon: 8.5f}, train_loss_kl:{kl: 8.5f}, elapse: {elapse:3.3f} min'.format(ppl=math.exp(min(train_loss,100)),accu=100*train_accu,
-                                                                                                            recon=train_loss_recon, kl=train_loss_kl,elapse=(time.time()-start)/60))
+        print(' -(Trianing) ppl: {ppl: 8.5f}, accuracy: {accu:3.3f}, train_loss_recon: {recon: 8.5f}, train_loss_kl:{kl: 8.5f}, elapse: {elapse:3.3f} min'.format(ppl=math.exp(min(train_loss,100)), accu=100*train_accu,
+                                                                                                            recon=train_loss_recon, kl=train_loss_kl, elapse=(time.time()-start)/60))
+        
         start = time.time()
-        valid_loss, valid_accu, valid_loss_recon, valid_loss_kl = eval_epoch(model,validation_data, device)
+        valid_loss, valid_accu, valid_loss_recon, valid_loss_kl = eval_epoch(model, validation_data, device)
         print(' -(Validation) ppl: {ppl: 8.5f}, accuracy: {accu:3.3f}, valid_loss_recon: {recon: 8.5f}, valid_loss_kl:{kl: 8.5f}, elapse: {elapse:3.3f} min'.format(ppl=math.exp(min(valid_loss,100)),accu=100*valid_accu,
                                                                                                             recon=valid_loss_recon, kl=valid_loss_kl,elapse=(time.time()-start)/60))
         valid_accus += [valid_accu]
@@ -193,7 +192,8 @@ def train(model, training_data, validation_data, optimizer, device, idx2word, ar
                 log_vf.write('{epoch}, {loss: 8.5f},{ppl: 8.5f},{accu: 3.3f}\n'.format(
                     epoch = epoch_i, loss=valid_loss, ppl=math.exp(min(valid_loss, 100)), accu=100*valid_accu
                 ))
-                
+
+
 def sample_generation(model, train_loader, idx2word, device):
     for batch in train_loader:
         equ_nodes, sns_nodes, equ_node_lens, sns_node_lens, equ_adj_matrixs, sns_adj_matrixs, tgt_seq, scene = map(lambda x: x.to(device), batch)
@@ -214,26 +214,26 @@ def sample_generation(model, train_loader, idx2word, device):
 def main():
     '''Main function'''
     parser = argparse.ArgumentParser()
-    parser.add_argument('-data',required=True)
+    parser.add_argument('-data', required=True)
     parser.add_argument('-epoch', type=int, default=200)
-    parser.add_argument('-batch_size',type=int, default=16)
+    parser.add_argument('-batch_size', type=int, default=16)
     
-    parser.add_argument('-embedding_dim',type=int, default=128) #node dim same as this
-    parser.add_argument('-n_hop',type=int, default=3)
-    parser.add_argument('-hidden_size',type=int, default=512)
+    parser.add_argument('-embedding_dim', type=int, default=128) #node dim same as this
+    parser.add_argument('-n_hop', type=int, default=3)
+    parser.add_argument('-hidden_size', type=int, default=512)
     parser.add_argument('-z_dim', type=int,default=128)
-    parser.add_argument('-teacher_forcing',type=float, default=0.5)
+    parser.add_argument('-teacher_forcing', type=float, default=0.5)
 
-    parser.add_argument('-n_warmup_steps',type=int, default=500)
+    parser.add_argument('-n_warmup_steps', type=int, default=500)
     
-    parser.add_argument('-dropout',type=float,default=0.1)
+    parser.add_argument('-dropout', type=float, default=0.1)
     
-    parser.add_argument('-log',default=None)
-    parser.add_argument('-save_model',default=None)
+    parser.add_argument('-log', default='./logs/')
+    parser.add_argument('-save_model', default=None)
     parser.add_argument('-save_mode', type=str, choices=['all','best'], default='best')
 
-    parser.add_argument('-no_cuda',action='store_true')
-    parser.add_argument('-label_smoothing',action='store_true')
+    parser.add_argument('-no_cuda', action='store_true')
+    parser.add_argument('-label_smoothing', action='store_true')
     torch.manual_seed(12)
     args = parser.parse_args()
     args.cuda = not args.no_cuda
@@ -241,24 +241,25 @@ def main():
     
     #====== Loading Dataset =====#
     data = torch.load(args.data)
+    # 感觉像模板
     args.max_token_seq_len = max(len(x) for x in data['train']['ref'])
     
-    training_data, validation_data = prepare_dataloaders(data,args)
+    training_data, validation_data = prepare_dataloaders(data, args)
     args.vocab_size = training_data.dataset.src_vocab_size
 
     #======= Preparing model ====#
     print(args)
-    device = torch.device('cuda:1' if args.cuda else 'cpu')
+    device = torch.device('cuda:0' if args.cuda else 'cpu')
     # device = torch.device('cpu')
     graph2seq = Graph2seq(
-        vocab_size=args.vocab_size, 
+        vocab_size = args.vocab_size, 
         embedding_dim = args.embedding_dim, 
         hidden_size = args.hidden_size, 
-        z_dim =args.z_dim,
+        z_dim = args.z_dim,
         output_size = args.vocab_size,
-        n_hop=args.n_hop,
-        teacher_forcing=args.teacher_forcing,
-        dropout=0.1).to(device)
+        n_hop = args.n_hop,
+        teacher_forcing = args.teacher_forcing,
+        dropout = 0.1).to(device)
 
 
     optimizer = ScheduledOptim(
@@ -268,7 +269,7 @@ def main():
         args.hidden_size, args.n_warmup_steps
     )
     idx2word = {value:item for item, value in data['dict']['tgt'].items()}
-    train(graph2seq, training_data, validation_data, optimizer, device,idx2word,args)
+    train(graph2seq, training_data, validation_data, optimizer, device, idx2word, args)
 
 def prepare_dataloaders(data, args):
     # =====Prepareing DataLoader=====
@@ -276,7 +277,7 @@ def prepare_dataloaders(data, args):
         MyDataset(
             src_word2idx = data['dict']['tgt'],
             tgt_word2idx = data['dict']['tgt'],
-            node_insts= data['train']['node_1'],# equation info
+            node_insts = data['train']['node_1'],# equation info
             rel_insts = data['train']['edge_1'],
             node_insts_1 = data['train']['node_2'],# common sense info
             rel_insts_1 = data['train']['edge_2'],
@@ -284,9 +285,9 @@ def prepare_dataloaders(data, args):
             tgt_insts = data['train']['ref']
         ),
         num_workers = 4,
-        batch_size=args.batch_size,
-        collate_fn=collate_fn,
-        shuffle=True
+        batch_size = args.batch_size,
+        collate_fn = collate_fn,
+        shuffle = True
     )
     valid_loader = torch.utils.data.DataLoader(
         MyDataset(
@@ -300,9 +301,9 @@ def prepare_dataloaders(data, args):
             tgt_insts = data['dev']['ref']
         ),
         num_workers = 4,
-        batch_size=args.batch_size,
-        collate_fn=collate_fn,
-        shuffle=False,
+        batch_size = args.batch_size,
+        collate_fn = collate_fn,
+        shuffle = False,
     )
     return train_loader, valid_loader
 

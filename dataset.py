@@ -11,43 +11,44 @@ Constants = Constants()
 def collate_fn(insts):
     '''PAD the instance to the max seq length in batch'''
     equ_nodes, com_sns_nodes, captions, equ_matrixs, com_sns_matrixs, scenes = zip(*insts)
+    
     len_equ_nodes = [len(node) for node in equ_nodes]
     len_sns_nodes = [len(node) for node in com_sns_nodes]
-
+    
     max_scene_len = max(len(scene) for scene in scenes)
+    max_caption_len = max(len(cap) for cap in captions)
+    max_equ_node_len = max(len_equ_nodes)
+    # padding topic words(scenes)
     batch_scenes = np.array([
-        inst + [Constants.PAD] * (max_scene_len-len(inst)) for inst in scenes
+        scene + [Constants.PAD] * (max_scene_len - len(scene)) for scene in scenes
     ])
     # padding equation nodes
-    max_equ_node_len = max(len_equ_nodes)
     batch_equ_nodes = np.array([
-        inst + [Constants.PAD] * (max_equ_node_len-len(inst)) for inst in equ_nodes
+        equ_node + [Constants.PAD] * (max_equ_node_len - len(equ_node)) for equ_node in equ_nodes
     ])
     # padding common sense nodes
     max_sns_node_len = max(len_sns_nodes)
     batch_sns_nodes = np.array([
-        inst + [Constants.PAD] * (max_sns_node_len - len(inst)) for inst in com_sns_nodes
+        com_sns_node + [Constants.PAD] * (max_sns_node_len - len(com_sns_node)) for com_sns_node in com_sns_nodes
     ])
-
     # padding captions
-    lengths_caption = [len(cap) for cap in captions]
-    max_caption_len = max(lengths_caption)
     batch_captions = np.array([
-        cap_inst + [Constants.PAD] * (max_caption_len-len(cap_inst)) for cap_inst in captions
+        cap_inst + [Constants.PAD] * (max_caption_len - len(cap_inst)) for cap_inst in captions
     ])
 
     # padding equation matrix
-    equ_matrixs_pad = []
-    for j, node_one in enumerate(equ_matrixs):
-        new_matrix = np.pad(equ_matrixs[j], ((0, max_equ_node_len-len(equ_matrixs[j])),(0, max_equ_node_len-len(equ_matrixs[j]))),'constant', constant_values=(0,0))
-        equ_matrixs_pad.append(new_matrix)
+    equ_matrixs_paded = []
+    for equ_matrix in equ_matrixs:
+        new_matrix = np.pad(equ_matrix, ((0, max_equ_node_len - len(equ_matrix)), (0, max_equ_node_len - len(equ_matrix))), 'constant', constant_values=(0, 0))
+        equ_matrixs_paded.append(new_matrix)
     
     # padding common sense matrix
-    sns_matrixs_pad = []
-    for j, node_one in enumerate(com_sns_matrixs):
-        new_matrix = np.pad(com_sns_matrixs[j], ((0, max_sns_node_len-len(com_sns_matrixs[j])),(0, max_sns_node_len-len(com_sns_matrixs[j]))),'constant', constant_values=(0,0))
-        sns_matrixs_pad.append(new_matrix)
-    return torch.LongTensor(batch_equ_nodes), torch.LongTensor(batch_sns_nodes),torch.FloatTensor(len_equ_nodes), torch.FloatTensor(len_sns_nodes),torch.FloatTensor(equ_matrixs_pad), torch.FloatTensor(sns_matrixs_pad), torch.LongTensor(batch_captions), torch.LongTensor(batch_scenes)
+    sns_matrixs_paded = []
+    for com_sns_matrix in com_sns_matrixs:
+        new_matrix = np.pad(com_sns_matrix, ((0, max_sns_node_len - len(com_sns_matrix)), (0, max_sns_node_len - len(com_sns_matrix))), 'constant', constant_values=(0, 0))
+        sns_matrixs_paded.append(new_matrix)
+    
+    return torch.tensor(batch_equ_nodes, dtype=torch.long), torch.tensor(batch_sns_nodes, dtype=torch.long), torch.tensor(len_equ_nodes, dtype=torch.float), torch.tensor(len_sns_nodes, dtype=torch.float), torch.tensor(equ_matrixs_paded, dtype=torch.float), torch.tensor(sns_matrixs_paded, dtype=torch.float), torch.tensor(batch_captions, dtype=torch.long), torch.tensor(batch_scenes, dtype=torch.long)
 
 class MyDataset(torch.utils.data.Dataset):
     def __init__(self, src_word2idx, tgt_word2idx, node_insts=None, rel_insts=None, node_insts_1=None, rel_insts_1=None,scene_insts=None,tgt_insts=None):
@@ -60,14 +61,17 @@ class MyDataset(torch.utils.data.Dataset):
         tgt_idx2word = {idx:word for word, idx in tgt_word2idx.items()}
         self._tgt_word2idx = tgt_word2idx
         self._tgt_idx2word = tgt_idx2word
-        self._rel_insts = rel_insts # equation info
-        self._rel_insts_1 = rel_insts_1 # common sense info
+
+        self._rel_insts = rel_insts # equation info for edge
+        self._rel_insts_1 = rel_insts_1 # common sense info for edge
+        # 模版
         self._tgt_insts = tgt_insts
+        # topic words
         self._scene_insts = scene_insts
 
     @property
     def n_insts(self):
-        '''Property for dataset size'''
+        '''property for dataset size'''
         return len(self._node_insts)
 
     @property
@@ -77,7 +81,7 @@ class MyDataset(torch.utils.data.Dataset):
 
     @property
     def tgt_vocab_size(self):
-        '''peoperty for vocab size'''
+        '''property for vocab size'''
         return len(self._tgt_word2idx)
 
     @property
@@ -102,17 +106,23 @@ class MyDataset(torch.utils.data.Dataset):
     
     def __getitem__(self, idx):
         # return one data pair (node and caption and adjmatrix)
+        # template
         one_caption = self._tgt_insts[idx] + [Constants.EOS_WORD]
+        # equation node
         one_node = self._node_insts[idx]
+        # euqation edge
         one_rel = self._rel_insts[idx]
+        # topic words
         one_scene = self._scene_insts[idx]
+        # commonsense node
         other_node = self._node_insts_1[idx]
+        # commonsense edge
         other_rel = self._rel_insts_1[idx]
-
-        one_num_caption = [self._src_word2idx.get(x,Constants.UNK) for x in one_caption]
-        one_num_node = [self._src_word2idx.get(x,Constants.UNK) for x in one_node]
+        # 模板/equation node/common sense node/topic words有索引
+        one_num_caption = [self._src_word2idx.get(x, Constants.UNK) for x in one_caption]
+        one_num_node = [self._src_word2idx.get(x, Constants.UNK) for x in one_node]
         one_num_scene = [self._src_word2idx.get(x, Constants.UNK) for x in one_scene]
-        other_num_node = [self._src_word2idx.get(x,Constants.UNK) for x in other_node]
+        other_num_node = [self._src_word2idx.get(x, Constants.UNK) for x in other_node]
         # build adj matrix
         # this is graph for equation information
         i = 0
@@ -147,5 +157,7 @@ class MyDataset(torch.utils.data.Dataset):
             head_other, tail_other = r_other
             loc1_other, loc2_other = other_inner_dict[head_other], other_inner_dict[tail_other]
             other_matrix[loc1_other][loc2_other], other_matrix[loc2_other][loc1_other] = 1,1
+        
+        # return equation node index / common sense node index / template index / equation matrix / common sense matrix / topic words
         return one_num_node, other_num_node, one_num_caption, matrix, other_matrix, one_num_scene
 

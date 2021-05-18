@@ -1,6 +1,6 @@
 # MaKE
 
-model file in model/dual_graph_vae_2.py
+model file in model/dualgraph_vae.py
 
 processed data can be found in processed_data
 

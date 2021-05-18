@@ -3,8 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import random
 import numpy as np
-from Constant import Constants
 
+from .Constant import Constants
+
+Constants = Constants()
 class Propogator(nn.Module):
     def __init__(self, node_dim):
         super(Propogator, self).__init__()

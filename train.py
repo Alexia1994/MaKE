@@ -42,10 +42,8 @@ def cal_loss(pred, gold, mu_prior, log_var_prior, mu_posterior, log_var_posterio
     """
     Calculate cross entropy loss, apply label smoothing if needed
     """
-    print("before view: gold shape:", gold.shape)
-    print("pred shape:", pred.shape)
+    
     gold = gold.contiguous().view(-1)
-    print("after view: gold shape:", gold.shape)
     loss_recon = F.cross_entropy(pred, gold, ignore_index=Constants.PAD, reduction='sum')
     # loss_kl = lambda_kl*-0.5 * torch.sum(1 + log_var - mu.pow(2)-log_var.exp())
     loss_kl = lambda_kl*gaussian_kld(mu_posterior, log_var_posterior, mu_prior, log_var_prior)
